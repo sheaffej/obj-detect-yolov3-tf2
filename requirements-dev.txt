@@ -1,0 +1,4 @@
+jupyterlab
+flake8
+matplotlib
+wandb

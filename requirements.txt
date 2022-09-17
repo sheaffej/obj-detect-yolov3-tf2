@@ -1,0 +1,5 @@
+tensorflow~=2.8.2
+opencv-python-headless~=4.6.0
+lxml~=4.9.1
+tqdm~=4.64.0
+albumentations~=1.2.1

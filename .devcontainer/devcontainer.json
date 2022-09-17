@@ -1,0 +1,40 @@
+{
+	"name": "YOLOv2 Tensorflow2 (sheaffej adaptation)",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
+	},
+	"runArgs": [
+		"--name", "yolo-vscode"
+	],
+
+    "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
+    "workspaceFolder": "/app",
+
+    "mounts": [
+        "type=bind,source=${localEnv:HOME}/Dropbox/DataSets,target=/DataSets,readonly"
+    ],
+
+	"containerEnv": {
+        // "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    },
+
+    // Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Set *default* container specific settings.json values on container create.
+	"settings": { 
+		"python.pythonPath": "/usr/local/bin/python",
+		"python.linting.enabled": true,
+		"python.linting.pylintEnabled": true,
+        "jupyter.notebookFileRoot": "${fileDirname}"
+	},
+
+	// Add the IDs of extensions you want installed when the container is created.
+	"extensions": [
+		"ms-python.python",
+		"mohsen1.prettify-json",
+		"ms-azuretools.vscode-docker",
+        "njpwerner.autodocstring"
+	]
+}
