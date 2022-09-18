@@ -6,6 +6,7 @@ RUN apt-get update \
 && apt install -y \
     # For OpenCV
     ffmpeg libsm6 libxext6 \
+    htop \
 && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 COPY requirements.txt /app/

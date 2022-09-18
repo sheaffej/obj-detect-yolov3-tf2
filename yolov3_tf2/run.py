@@ -6,6 +6,7 @@ from time import perf_counter
 import time
 from typing import Tuple, List
 
+import albumentations as A
 import cv2
 import tensorflow as tf
 from tensorflow.python.keras import Model
@@ -30,7 +31,8 @@ from yolov3_tf2.dataset import transform_images  # , load_tfrecord_dataset
 from yolov3_tf2.utils import draw_outputs, freeze_all
 import yolov3_tf2.dataset as dataset_module
 from yolov3_tf2.yolo_images import (
-    read_image_with_yolo_annotations, write_augmented_image_files, write_training_tfrecords
+    read_image_with_yolo_annotations, write_augmented_image_files, write_training_tfrecords,
+    convert_bboxes_yolo_to_minmax
 )
 from yolov3_tf2.image_augmentation import (
     aug_horizontal_flip, aug_rotate_random, aug_scale_random,
@@ -589,16 +591,120 @@ def evaluate(
     return result
 
 
-def augment_images(
+# def augment_images(
+#     train_img_glob: str,
+#     tf_output_dir: str,
+#     temp_img_dir: str = '/tmp/images',
+#     tf_output_prefix: str = '',
+#     num_rand_augs: int = 4,
+#     random_seed: int = 42,
+#     image_size: int = 416,
+#     min_file_mb_size: int = 30
+# ):
+#     rng = np.random.default_rng(random_seed)
+
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     # Read original training images
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     orig_img_files = glob(train_img_glob)
+#     print(f"{len(orig_img_files)} images found")
+
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     # Augment images & write augmented images to temp directory
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     os.makedirs(temp_img_dir, exist_ok=True)
+
+#     for img_file_name in tqdm(orig_img_files, desc='Augmenting images'):
+#         orig_scaled_img, orig_bboxes = read_image_with_yolo_annotations(img_file_name, resize=(image_size, image_size))
+#         # print(f"orig_bboxes: {orig_bboxes}")
+
+#         # Write the resized original
+#         write_augmented_image_files(
+#             new_img=orig_scaled_img, bboxes=orig_bboxes, orig_filename=img_file_name,
+#             augmentation_name='orig', output_dir=temp_img_dir
+#         )
+
+#         # Horizontal flip - Only once since it's always the same transformation
+#         new_img, new_bboxes = aug_horizontal_flip(orig_scaled_img, orig_bboxes)
+#         write_augmented_image_files(
+#             new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+#             augmentation_name='hflip', output_dir=temp_img_dir
+#         )
+
+#         # Random scale
+#         for i in range(1, num_rand_augs + 1):
+#             new_img, new_bboxes = aug_scale_random(orig_scaled_img, orig_bboxes)
+#             write_augmented_image_files(
+#                 new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+#                 augmentation_name=f'scale{i}', output_dir=temp_img_dir
+#             )
+
+#         # Random translate
+#         for i in range(1, num_rand_augs + 1):
+#             new_img, new_bboxes = aug_translate_random(orig_scaled_img, orig_bboxes)
+#             write_augmented_image_files(
+#                 new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+#                 augmentation_name=f'translate{i}', output_dir=temp_img_dir
+#             )
+
+#         # Random rotate
+#         for i in range(1, num_rand_augs + 1):
+#             new_img, new_bboxes = aug_rotate_random(orig_scaled_img, orig_bboxes)
+#             write_augmented_image_files(
+#                 new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+#                 augmentation_name=f'rotate{i}', output_dir=temp_img_dir
+#             )
+
+#         # Random shear
+#         for i in range(1, num_rand_augs + 1):
+#             new_img, new_bboxes = aug_shear_random(orig_scaled_img, orig_bboxes)
+#             write_augmented_image_files(
+#                 new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+#                 augmentation_name=f'shear{i}', output_dir=temp_img_dir
+#             )
+
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     # Split into train, validation
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     TEMP_DIR_GLOB = os.path.join(temp_img_dir, 'IMG_*.png')
+
+#     print('Splitting augmented images into train/validation sets...')
+#     img_files = glob(TEMP_DIR_GLOB)
+#     splits = _train_val_test_split(img_files, val_fraction=0.1, test_fraction=0., shuffle=True, rng=rng)
+
+#     for split_name, split_items in splits.items():
+#         print(f"  {split_name}: {len(split_items)} images")
+
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     # Convert for tfrecords and write tfrecord files
+#     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#     print()
+#     print('Converting images to tfrecord files...')
+#     os.makedirs(tf_output_dir, exist_ok=True)
+
+#     for split_name, split_items in splits.items():
+
+#         write_training_tfrecords(
+#             items=split_items, type_name=split_name,
+#             output_dir=tf_output_dir, file_prefix=tf_output_prefix,
+#             min_file_mb=min_file_mb_size
+#         )
+
+#     print("Process complete.")
+
+
+def augment_and_prep_train_images(
     train_img_glob: str,
+    transform_groups: Tuple[A.core.composition.Compose, int],
     tf_output_dir: str,
     temp_img_dir: str = '/tmp/images',
     tf_output_prefix: str = '',
-    num_rand_augs: int = 4,
     random_seed: int = 42,
     image_size: int = 416,
+    keep_original: bool = True,
     min_file_mb_size: int = 30
 ):
+
     rng = np.random.default_rng(random_seed)
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -613,53 +719,33 @@ def augment_images(
     os.makedirs(temp_img_dir, exist_ok=True)
 
     for img_file_name in tqdm(orig_img_files, desc='Augmenting images'):
-        orig_scaled_img, orig_bboxes = read_image_with_yolo_annotations(img_file_name, resize=(image_size, image_size))
-        # print(f"orig_bboxes: {orig_bboxes}")
+        orig_scaled_img, orig_bboxes = read_image_with_yolo_annotations(
+            img_file_name,
+            resize=(image_size, image_size),
+            yolo_boxes=True
+        )
 
         # Write the resized original
-        write_augmented_image_files(
-            new_img=orig_scaled_img, bboxes=orig_bboxes, orig_filename=img_file_name,
-            augmentation_name='orig', output_dir=temp_img_dir
-        )
-
-        # Horizontal flip - Only once since it's always the same transformation
-        new_img, new_bboxes = aug_horizontal_flip(orig_scaled_img, orig_bboxes)
-        write_augmented_image_files(
-            new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
-            augmentation_name='hflip', output_dir=temp_img_dir
-        )
-
-        # Random scale
-        for i in range(1, num_rand_augs + 1):
-            new_img, new_bboxes = aug_scale_random(orig_scaled_img, orig_bboxes)
+        if keep_original:
             write_augmented_image_files(
-                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
-                augmentation_name=f'scale{i}', output_dir=temp_img_dir
+                new_img=orig_scaled_img, bboxes=orig_bboxes, orig_filename=img_file_name,
+                augmentation_name='orig', output_dir=temp_img_dir
             )
 
-        # Random translate
-        for i in range(1, num_rand_augs + 1):
-            new_img, new_bboxes = aug_translate_random(orig_scaled_img, orig_bboxes)
-            write_augmented_image_files(
-                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
-                augmentation_name=f'translate{i}', output_dir=temp_img_dir
-            )
+        # For each transform group
+        transform: A.core.composition.Compose
+        for g, t_group in enumerate(transform_groups):
+            transform, num_imgs = t_group
 
-        # Random rotate
-        for i in range(1, num_rand_augs + 1):
-            new_img, new_bboxes = aug_rotate_random(orig_scaled_img, orig_bboxes)
-            write_augmented_image_files(
-                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
-                augmentation_name=f'rotate{i}', output_dir=temp_img_dir
-            )
+            # Transform the number of times requested
+            for i in range(num_imgs):
+                transformed = transform(image=orig_scaled_img, bboxes=orig_bboxes.tolist())
 
-        # Random shear
-        for i in range(1, num_rand_augs + 1):
-            new_img, new_bboxes = aug_shear_random(orig_scaled_img, orig_bboxes)
-            write_augmented_image_files(
-                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
-                augmentation_name=f'shear{i}', output_dir=temp_img_dir
-            )
+                write_augmented_image_files(
+                    new_img=transformed['image'], bboxes=np.array(transformed['bboxes']),
+                    orig_filename=img_file_name, augmentation_name=f'g{g}-i{i}',
+                    output_dir=temp_img_dir
+                )
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # Split into train, validation

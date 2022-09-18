@@ -210,6 +210,21 @@ def bbox_yolo_to_xyminmax(
     ]
 
 
+def convert_bboxes_yolo_to_minmax(image: np.ndarray, bboxes: np.ndarray):
+
+    img_h, img_w = image.shape[:2]
+    xc, yc, w, h, id = np.hsplit(bboxes, 5)
+
+    xmin = (xc - (w / 2)) * img_w
+    ymin = (yc - (h / 2)) * img_h
+    xmax = xmin + (w * img_w)
+    ymax = ymin + (h * img_h)
+
+    minmax_bboxes = np.hstack([xmin, ymin, xmax, ymax, id]).astype(np.int32)
+
+    return minmax_bboxes
+
+
 def bbox_xyminmax_to_yolo(
     img_width: int, img_height: int,
     xmin: int, ymin: int, xmax: int, ymax: int
@@ -262,7 +277,7 @@ def write_yolo_anno_file(yolo_file: str, bboxes: List, img_width: int, img_heigh
                 img_width, img_height,
                 bbox[0], bbox[1], bbox[2], bbox[3]
             )
-            class_id = bbox[4]
+            class_id = int(bbox[4])
             f.write(f"{class_id} {xcenter} {ycenter} {width} {height}\n")
 
 
