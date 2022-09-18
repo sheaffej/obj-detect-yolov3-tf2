@@ -1,3 +1,4 @@
+from glob import glob
 import numpy as np
 import os
 from tqdm import tqdm
@@ -28,9 +29,16 @@ from yolov3_tf2.models import (
 from yolov3_tf2.dataset import transform_images  # , load_tfrecord_dataset
 from yolov3_tf2.utils import draw_outputs, freeze_all
 import yolov3_tf2.dataset as dataset_module
+from yolov3_tf2.yolo_images import (
+    read_image_with_yolo_annotations, write_augmented_image_files, write_training_tfrecords
+)
+from yolov3_tf2.image_augmentation import (
+    aug_horizontal_flip, aug_rotate_random, aug_scale_random,
+    aug_shear_random, aug_translate_random
+)
 
 
-def load_model(
+def _load_model(
     num_classes: int,
     weights: str,
     max_boxes: int = 100,
@@ -66,139 +74,7 @@ def load_model(
     return model
 
 
-def detect(
-    model: Model,
-    image: str,
-    size: int = 416,
-):
-
-    img_raw = tf.image.decode_image(open(image, 'rb').read(), channels=3)
-    img = tf.expand_dims(img_raw, 0)
-    img = transform_images(img, size)
-
-    # boxes, scores, classes, nums = model(img)
-    boxes, scores, classes, nums = model.predict(img)
-    return boxes, scores, classes, nums
-
-
-def detect_summary(
-    image: str,
-    num_classes: int,
-    weights: str,
-    classes_file: str,
-    size: int = 416,
-    output: str = None,
-    max_boxes: int = 100,
-    iou_threshold: float = 0.5,
-    score_threshold: float = 0.5,
-    soft_nms_sigma: float = 0.0,
-    tiny: bool = False,
-    verbose=True
-):
-    class_names = [c.strip() for c in open(classes_file).readlines()]
-    if verbose:
-        print('classes loaded')
-
-    model = load_model(
-        num_classes=num_classes,
-        weights=weights,
-        max_boxes=max_boxes,
-        iou_threshold=iou_threshold,
-        score_threshold=score_threshold,
-        soft_nms_sigma=soft_nms_sigma,
-        tiny=tiny,
-        verbose=verbose
-    )
-
-    boxes, scores, classes, nums = detect(
-        model=model,
-        image=image,
-        size=size,
-    )
-
-    if verbose:
-        print('detections:')
-        for i in range(nums[0]):
-            print('\t{}, {}, {}'.format(class_names[int(classes[0][i])], np.array(scores[0][i]), np.array(boxes[0][i])))
-
-    img_raw = tf.image.decode_image(open(image, 'rb').read(), channels=3)
-    img = cv2.cvtColor(img_raw.numpy(), cv2.COLOR_RGB2BGR)
-    img = draw_outputs(img, (boxes, scores, classes, nums), class_names)
-    cv2.imwrite(output, img)
-    if verbose:
-        print('output saved to: {}'.format(output))
-
-
-def detect_batch(
-    image_files: List[str],
-    output_dir: str,
-    num_classes: int,
-    weights: str,
-    classes_file: str,
-    size: int = 416,
-    max_boxes: int = 100,
-    iou_threshold: float = 0.5,
-    score_threshold: float = 0.5,
-    soft_nms_sigma: float = 0.0,
-    tiny: bool = False,
-    verbose=True
-):
-
-    class_names = [c.strip() for c in open(classes_file).readlines()]
-    if verbose:
-        print('classes loaded')
-
-    model = load_model(
-        num_classes=num_classes,
-        weights=weights,
-        max_boxes=max_boxes,
-        iou_threshold=iou_threshold,
-        score_threshold=score_threshold,
-        soft_nms_sigma=soft_nms_sigma,
-        tiny=tiny,
-        verbose=verbose
-    )
-
-    stats = []
-
-    for image_file in tqdm(image_files):
-        start_time = perf_counter()
-
-        # if verbose:
-        #     print(f'Detecting: {image_file}')
-        basename = os.path.basename(image_file)
-        anno_image_file = os.path.join(output_dir, basename)
-
-        detect_start_time = perf_counter()
-        boxes, scores, classes, nums = detect(
-            model=model,
-            image=image_file,
-            size=size,
-        )
-        detect_end_time = perf_counter()
-
-        img_raw = tf.image.decode_image(open(image_file, 'rb').read(), channels=3)
-        img = cv2.cvtColor(img_raw.numpy(), cv2.COLOR_RGB2BGR)
-        img = draw_outputs(img, (boxes, scores, classes, nums), class_names, scale_font=True)
-        cv2.imwrite(anno_image_file, img)
-
-        end_time = perf_counter()
-        stats.append(
-            [
-                end_time - start_time,                                            # Total time
-                detect_end_time - detect_start_time,                              # Detection time
-                (end_time - start_time) - (detect_end_time - detect_start_time)   # Non-detect time
-            ]
-        )
-
-    if verbose:
-        stats_np = np.array(stats)
-        print(f'     Total time: min {round(stats_np[:, 0].min(), 2)}, avg {round(stats_np[:, 0].mean(), 2)}, max {round(stats_np[:, 0].max(), 2)}')
-        print(f'    Detect time: min {round(stats_np[:, 1].min(), 2)}, avg {round(stats_np[:, 1].mean(), 2)}, max {round(stats_np[:, 1].max(), 2)}')
-        print(f'Non-detect time: min {round(stats_np[:, 2].min(), 2)}, avg {round(stats_np[:, 2].mean(), 2)}, max {round(stats_np[:, 2].max(), 2)}')
-
-
-def setup_model(
+def _setup_model(
     weights: str,
     num_classes: int,
     training: bool = False,     # When true, model's output is structured for YoloLoss function. When false, output is the predicted bounding boxes (i.e. for drawing/etc)
@@ -267,7 +143,7 @@ def setup_model(
     return model, optimizer, loss, anchors, anchor_masks
 
 
-def prep_training_data(
+def _prep_training_data(
     data_file_glob: str,
     classes_file: str = None,
     image_size: int = 416,
@@ -276,7 +152,6 @@ def prep_training_data(
     anchor_masks: List = yolo_anchor_masks
 ):
     train_dataset = dataset_module.load_tfrecord_dataset(data_file_glob, classes_file, image_size)
-    # train_dataset = train_dataset.shuffle(buffer_size=512)
     train_dataset = train_dataset.batch(batch_size)
     train_dataset = train_dataset.map(
         lambda x, y: (
@@ -286,6 +161,184 @@ def prep_training_data(
     )
     train_dataset = train_dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
     return train_dataset
+
+
+def _train_val_test_split(
+    list_to_split: List[any],
+    val_fraction: float, test_fraction: float = 0.0,
+    shuffle: bool = True, rng: np.random.Generator = None, verbose: bool = False
+) -> dict:
+    """Splits a list of items into 2 or 3 sets: `train`, and one or both of `validation` and `test`.
+    The values of `val_fraction` and `test_fraction` must be less than 1.0. The remainder fraction
+    will be the train split (`train = 1.0 - (val_fraction + test_fraction)`).
+
+    Args:
+        list_to_split (List[any]): The list to be split
+        val_fraction (float): The fractional (`0.0 <= s < 1.0`) for the validation split
+        test_fraction (float, optional): The fractional (`0.0 <= s < 1.0`) for the test split. Defaults to 0.0.
+        shuffle (bool, optional): Set `True` to shuffle before splitting. Defaults to True.
+        verbose (bool, optional): Print additional progress. Defaults to False.
+
+    Returns:
+        dict: Dictionary of {'train': train_items, 'validation': val_items, 'test': test_items}
+    """
+    num_train_items = int(len(list_to_split) * (1.0 - val_fraction - test_fraction))
+    num_val_items = int(len(list_to_split) * val_fraction)
+    num_test_items = int(len(list_to_split) * test_fraction)
+
+    assert (num_train_items + num_val_items + num_test_items) <= len(list_to_split)
+    assert num_train_items > 0
+
+    if verbose:
+        print(f"num_train_items: {num_train_items}, num_val_items: {num_val_items}, num_test_items: {num_test_items}")
+
+    if shuffle:
+        rng.shuffle(list_to_split)
+
+    item_split_sets = {}
+    if num_val_items > 0 and num_test_items > 0:
+        train, val, test = np.split(list_to_split, [num_train_items, (num_train_items + num_val_items)])
+        item_split_sets = {"train": train, "validation": val, "test": test}
+    elif num_val_items > 0 and num_test_items == 0:
+        train, val = np.split(list_to_split, [num_train_items])
+        item_split_sets = {"train": train, "validation": val}
+    elif num_val_items == 0 and num_test_items > 0:
+        train, test = np.split(list_to_split, [num_train_items])
+        item_split_sets = {"train": train, "test": test}
+
+    return item_split_sets
+
+
+def detect(
+    model: Model,
+    image: str,
+    size: int = 416,
+):
+
+    img_raw = tf.image.decode_image(open(image, 'rb').read(), channels=3)
+    img = tf.expand_dims(img_raw, 0)
+    img = transform_images(img, size)
+
+    # boxes, scores, classes, nums = model(img)
+    boxes, scores, classes, nums = model.predict(img)
+    return boxes, scores, classes, nums
+
+
+def detect_summary(
+    image: str,
+    num_classes: int,
+    weights: str,
+    classes_file: str,
+    size: int = 416,
+    output: str = None,
+    max_boxes: int = 100,
+    iou_threshold: float = 0.5,
+    score_threshold: float = 0.5,
+    soft_nms_sigma: float = 0.0,
+    tiny: bool = False,
+    verbose=True
+):
+    class_names = [c.strip() for c in open(classes_file).readlines()]
+    if verbose:
+        print('classes loaded')
+
+    model = _load_model(
+        num_classes=num_classes,
+        weights=weights,
+        max_boxes=max_boxes,
+        iou_threshold=iou_threshold,
+        score_threshold=score_threshold,
+        soft_nms_sigma=soft_nms_sigma,
+        tiny=tiny,
+        verbose=verbose
+    )
+
+    boxes, scores, classes, nums = detect(
+        model=model,
+        image=image,
+        size=size,
+    )
+
+    if verbose:
+        print('detections:')
+        for i in range(nums[0]):
+            print('\t{}, {}, {}'.format(class_names[int(classes[0][i])], np.array(scores[0][i]), np.array(boxes[0][i])))
+
+    img_raw = tf.image.decode_image(open(image, 'rb').read(), channels=3)
+    img = cv2.cvtColor(img_raw.numpy(), cv2.COLOR_RGB2BGR)
+    img = draw_outputs(img, (boxes, scores, classes, nums), class_names)
+    cv2.imwrite(output, img)
+    if verbose:
+        print('output saved to: {}'.format(output))
+
+
+def detect_batch(
+    image_files: List[str],
+    output_dir: str,
+    num_classes: int,
+    weights: str,
+    classes_file: str,
+    size: int = 416,
+    max_boxes: int = 100,
+    iou_threshold: float = 0.5,
+    score_threshold: float = 0.5,
+    soft_nms_sigma: float = 0.0,
+    tiny: bool = False,
+    verbose=True
+):
+
+    class_names = [c.strip() for c in open(classes_file).readlines()]
+    if verbose:
+        print('classes loaded')
+
+    model = _load_model(
+        num_classes=num_classes,
+        weights=weights,
+        max_boxes=max_boxes,
+        iou_threshold=iou_threshold,
+        score_threshold=score_threshold,
+        soft_nms_sigma=soft_nms_sigma,
+        tiny=tiny,
+        verbose=verbose
+    )
+
+    stats = []
+
+    for image_file in tqdm(image_files):
+        start_time = perf_counter()
+
+        # if verbose:
+        #     print(f'Detecting: {image_file}')
+        basename = os.path.basename(image_file)
+        anno_image_file = os.path.join(output_dir, basename)
+
+        detect_start_time = perf_counter()
+        boxes, scores, classes, nums = detect(
+            model=model,
+            image=image_file,
+            size=size,
+        )
+        detect_end_time = perf_counter()
+
+        img_raw = tf.image.decode_image(open(image_file, 'rb').read(), channels=3)
+        img = cv2.cvtColor(img_raw.numpy(), cv2.COLOR_RGB2BGR)
+        img = draw_outputs(img, (boxes, scores, classes, nums), class_names, scale_font=True)
+        cv2.imwrite(anno_image_file, img)
+
+        end_time = perf_counter()
+        stats.append(
+            [
+                end_time - start_time,                                            # Total time
+                detect_end_time - detect_start_time,                              # Detection time
+                (end_time - start_time) - (detect_end_time - detect_start_time)   # Non-detect time
+            ]
+        )
+
+    if verbose:
+        stats_np = np.array(stats)
+        print(f'     Total time: min {round(stats_np[:, 0].min(), 2)}, avg {round(stats_np[:, 0].mean(), 2)}, max {round(stats_np[:, 0].max(), 2)}')
+        print(f'    Detect time: min {round(stats_np[:, 1].min(), 2)}, avg {round(stats_np[:, 1].mean(), 2)}, max {round(stats_np[:, 1].max(), 2)}')
+        print(f'Non-detect time: min {round(stats_np[:, 2].min(), 2)}, avg {round(stats_np[:, 2].mean(), 2)}, max {round(stats_np[:, 2].max(), 2)}')
 
 
 def train(
@@ -347,14 +400,14 @@ def train(
         batch_size = batch_size * strategy.num_replicas_in_sync
 
         with strategy.scope():
-            model, optimizer, loss, anchors, anchor_masks = setup_model(
+            model, optimizer, loss, anchors, anchor_masks = _setup_model(
                 training=True, weights=weights, weights_num_classes=weights_num_classes,
                 num_classes=num_classes, size=image_size,
                 mode=train_mode, learning_rate=learning_rate, transfer=transfer,
                 tiny=tiny
             )
     else:
-        model, optimizer, loss, anchors, anchor_masks = setup_model(
+        model, optimizer, loss, anchors, anchor_masks = _setup_model(
             training=True, weights=weights, weights_num_classes=weights_num_classes,
             num_classes=num_classes, size=image_size,
             mode=train_mode, learning_rate=learning_rate, transfer=transfer,
@@ -362,7 +415,7 @@ def train(
         )
 
     # Build the training data pipeline
-    train_dataset = prep_training_data(
+    train_dataset = _prep_training_data(
         data_file_glob=dataset_glob,
         classes_file=classes_path,
         image_size=image_size,
@@ -375,7 +428,7 @@ def train(
 
     # Optionally, build the validation data pipeline
     if val_dataset_glob:
-        val_dataset = prep_training_data(
+        val_dataset = _prep_training_data(
             data_file_glob=val_dataset_glob,
             classes_file=classes_path,
             image_size=image_size,
@@ -511,7 +564,7 @@ def evaluate(
     print_result: bool = False
 ):
 
-    test_dataset = prep_training_data(
+    test_dataset = _prep_training_data(
         data_file_glob=test_dataset_glob,
         classes_file=classes_file,
         image_size=image_size,
@@ -522,7 +575,7 @@ def evaluate(
     if input_batch_limit:
         test_dataset = test_dataset.take(input_batch_limit)
 
-    model, optimizer, loss, anchors, anchor_masks = setup_model(
+    model, optimizer, loss, anchors, anchor_masks = _setup_model(
         training=True, weights=weights_file, weights_num_classes=weights_num_classes,
         num_classes=num_classes, size=image_size,
         mode=train_mode, learning_rate=learning_rate, transfer=transfer,
@@ -534,3 +587,105 @@ def evaluate(
         print(dict(zip(model.metrics_names, result)))
 
     return result
+
+
+def augment_images(
+    train_img_glob: str,
+    tf_output_dir: str,
+    temp_img_dir: str = '/tmp/images',
+    tf_output_prefix: str = '',
+    num_rand_augs: int = 4,
+    random_seed: int = 42,
+    image_size: int = 416,
+    min_file_mb_size: int = 30
+):
+    rng = np.random.default_rng(random_seed)
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Read original training images
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    orig_img_files = glob(train_img_glob)
+    print(f"{len(orig_img_files)} images found")
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Augment images & write augmented images to temp directory
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    os.makedirs(temp_img_dir, exist_ok=True)
+
+    for img_file_name in tqdm(orig_img_files, desc='Augmenting images'):
+        orig_scaled_img, orig_bboxes = read_image_with_yolo_annotations(img_file_name, resize=(image_size, image_size))
+        # print(f"orig_bboxes: {orig_bboxes}")
+
+        # Write the resized original
+        write_augmented_image_files(
+            new_img=orig_scaled_img, bboxes=orig_bboxes, orig_filename=img_file_name,
+            augmentation_name='orig', output_dir=temp_img_dir
+        )
+
+        # Horizontal flip - Only once since it's always the same transformation
+        new_img, new_bboxes = aug_horizontal_flip(orig_scaled_img, orig_bboxes)
+        write_augmented_image_files(
+            new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+            augmentation_name='hflip', output_dir=temp_img_dir
+        )
+
+        # Random scale
+        for i in range(1, num_rand_augs + 1):
+            new_img, new_bboxes = aug_scale_random(orig_scaled_img, orig_bboxes)
+            write_augmented_image_files(
+                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+                augmentation_name=f'scale{i}', output_dir=temp_img_dir
+            )
+
+        # Random translate
+        for i in range(1, num_rand_augs + 1):
+            new_img, new_bboxes = aug_translate_random(orig_scaled_img, orig_bboxes)
+            write_augmented_image_files(
+                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+                augmentation_name=f'translate{i}', output_dir=temp_img_dir
+            )
+
+        # Random rotate
+        for i in range(1, num_rand_augs + 1):
+            new_img, new_bboxes = aug_rotate_random(orig_scaled_img, orig_bboxes)
+            write_augmented_image_files(
+                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+                augmentation_name=f'rotate{i}', output_dir=temp_img_dir
+            )
+
+        # Random shear
+        for i in range(1, num_rand_augs + 1):
+            new_img, new_bboxes = aug_shear_random(orig_scaled_img, orig_bboxes)
+            write_augmented_image_files(
+                new_img=new_img, bboxes=new_bboxes, orig_filename=img_file_name,
+                augmentation_name=f'shear{i}', output_dir=temp_img_dir
+            )
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Split into train, validation
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    TEMP_DIR_GLOB = os.path.join(temp_img_dir, 'IMG_*.png')
+
+    print('Splitting augmented images into train/validation sets...')
+    img_files = glob(TEMP_DIR_GLOB)
+    splits = _train_val_test_split(img_files, val_fraction=0.1, test_fraction=0., shuffle=True, rng=rng)
+
+    for split_name, split_items in splits.items():
+        print(f"  {split_name}: {len(split_items)} images")
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Convert for tfrecords and write tfrecord files
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    print()
+    print('Converting images to tfrecord files...')
+    os.makedirs(tf_output_dir, exist_ok=True)
+
+    for split_name, split_items in splits.items():
+
+        write_training_tfrecords(
+            items=split_items, type_name=split_name,
+            output_dir=tf_output_dir, file_prefix=tf_output_prefix,
+            min_file_mb=min_file_mb_size
+        )
+
+    print("Process complete.")

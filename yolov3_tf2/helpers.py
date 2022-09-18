@@ -11,52 +11,6 @@ RANDOM_SEED = 42
 rng = np.random.default_rng(RANDOM_SEED)
 
 
-def train_val_test_split(
-    list_to_split: List[any],
-    val_fraction: float, test_fraction: float = 0.0,
-    shuffle: bool = True, verbose: bool = False
-) -> dict:
-    """Splits a list of items into 2 or 3 sets: `train`, and one or both of `validation` and `test`.
-    The values of `val_fraction` and `test_fraction` must be less than 1.0. The remainder fraction
-    will be the train split (`train = 1.0 - (val_fraction + test_fraction)`).
-
-    Args:
-        list_to_split (List[any]): The list to be split
-        val_fraction (float): The fractional (`0.0 <= s < 1.0`) for the validation split
-        test_fraction (float, optional): The fractional (`0.0 <= s < 1.0`) for the test split. Defaults to 0.0.
-        shuffle (bool, optional): Set `True` to shuffle before splitting. Defaults to True.
-        verbose (bool, optional): Print additional progress. Defaults to False.
-
-    Returns:
-        dict: Dictionary of {'train': train_items, 'validation': val_items, 'test': test_items}
-    """
-    num_train_items = int(len(list_to_split) * (1.0 - val_fraction - test_fraction))
-    num_val_items = int(len(list_to_split) * val_fraction)
-    num_test_items = int(len(list_to_split) * test_fraction)
-
-    assert (num_train_items + num_val_items + num_test_items) <= len(list_to_split)
-    assert num_train_items > 0
-
-    if verbose:
-        print(f"num_train_items: {num_train_items}, num_val_items: {num_val_items}, num_test_items: {num_test_items}")
-
-    if shuffle:
-        rng.shuffle(list_to_split)
-
-    item_split_sets = {}
-    if num_val_items > 0 and num_test_items > 0:
-        train, val, test = np.split(list_to_split, [num_train_items, (num_train_items + num_val_items)])
-        item_split_sets = {"train": train, "validation": val, "test": test}
-    elif num_val_items > 0 and num_test_items == 0:
-        train, val = np.split(list_to_split, [num_train_items])
-        item_split_sets = {"train": train, "validation": val}
-    elif num_val_items == 0 and num_test_items > 0:
-        train, test = np.split(list_to_split, [num_train_items])
-        item_split_sets = {"train": train, "test": test}
-
-    return item_split_sets
-
-
 def draw_image_bboxes(image: np.ndarray, bboxes: Tuple or List, color: int = None) -> np.ndarray:
     """Draw bouding boxes on an image
 
@@ -99,8 +53,10 @@ def display_image(image: np.ndarray, size: float = 10.0, dpi: int = 80, gray: bo
         cmap = "gray"
 
     fig = plt.figure(figsize=(size, size), dpi=dpi)
-    ax = fig.add_subplot(111)
-    ax.imshow(image, cmap=cmap)
+    plt.axis('off')
+    # ax = fig.add_subplot(111)
+    # ax.imshow(image, cmap=cmap)
+    plt.imshow(image, cmap=cmap)
 
 
 def draw_yolo_annotatated_image(img_file_name: str = None, display: bool = True) -> None or np.ndarray:
