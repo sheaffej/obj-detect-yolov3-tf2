@@ -715,6 +715,7 @@ def augment_and_prep_train_images(
     # Read original training images
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     orig_img_files = glob(train_img_glob)
+    assert len(orig_img_files) > 0, f"No training image found at {train_img_glob}"
     print(f"{len(orig_img_files)} images found")
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -726,7 +727,8 @@ def augment_and_prep_train_images(
         orig_scaled_img, orig_bboxes = read_image_with_yolo_annotations(
             img_file_name,
             resize=(image_size, image_size),
-            yolo_boxes=True
+            yolo_boxes=True,
+            bgr2rgb=True
         )
 
         # Write the resized original

@@ -321,7 +321,7 @@ def read_image_with_yolo_annotations(img_filename: str, resize: Tuple[int] = Non
 
 def write_augmented_image_files(
     new_img: np.ndarray, bboxes: np.ndarray, orig_filename: str,
-    augmentation_name: str, output_dir: str, verbose: bool = False
+    augmentation_name: str, output_dir: str, rgb2bgr:bool = True, verbose: bool = False
 ) -> Tuple[str, str]:
     """Write a new image file that has been augmented
 
@@ -345,6 +345,8 @@ def write_augmented_image_files(
     )
     new_img_filename = f"{file_basename}.png"
     new_yolo_filename = f"{file_basename}.txt"
+    if rgb2bgr:
+        new_img = cv2.cvtColor(new_img, cv2.COLOR_RGB2BGR)
     cv2.imwrite(new_img_filename, new_img)
     write_yolo_anno_file(
         yolo_file=new_yolo_filename,
