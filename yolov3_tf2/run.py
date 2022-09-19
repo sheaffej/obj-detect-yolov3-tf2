@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from glob import glob
 import numpy as np
 import os
@@ -27,12 +28,11 @@ from yolov3_tf2.models import (
     yolo_anchors, yolo_anchor_masks,
     yolo_tiny_anchors, yolo_tiny_anchor_masks
 )
-from yolov3_tf2.dataset import transform_images  # , load_tfrecord_dataset
+from yolov3_tf2.dataset import transform_images
 from yolov3_tf2.utils import draw_outputs, freeze_all
 import yolov3_tf2.dataset as dataset_module
 from yolov3_tf2.yolo_images import (
     read_image_with_yolo_annotations, write_augmented_image_files, write_training_tfrecords,
-    convert_bboxes_yolo_to_minmax
 )
 from yolov3_tf2.image_augmentation import (
     aug_horizontal_flip, aug_rotate_random, aug_scale_random,
@@ -356,7 +356,7 @@ def train(
     transfer: str = 'darknet',
     weights: str = None,
     weights_num_classes: int = None,
-    logs_path: str = None,
+    logs_path: str = 'logs',
     multi_gpu: bool = False,
     tiny: bool = False,
     verbose: bool = True,
@@ -386,7 +386,10 @@ def train(
         print(f"  {k}: {v}")
 
     if wandb_project_name:
-        wandb.init(project=wandb_project_name, name=wandb_run_name, notes=wandb_notes)
+        wandb.init(
+            project=wandb_project_name, name=wandb_run_name, notes=wandb_notes,
+            sync_tensorboard=use_tensorboard
+        )
         wandb.config.update(args)
 
     # Setup the model
@@ -591,7 +594,7 @@ def evaluate(
     return result
 
 
-# def augment_images(
+# def orig_augment_images(
 #     train_img_glob: str,
 #     tf_output_dir: str,
 #     temp_img_dir: str = '/tmp/images',
@@ -702,7 +705,8 @@ def augment_and_prep_train_images(
     random_seed: int = 42,
     image_size: int = 416,
     keep_original: bool = True,
-    min_file_mb_size: int = 30
+    min_file_mb_size: int = 30,
+    num_threads: int = 1
 ):
 
     rng = np.random.default_rng(random_seed)
@@ -718,7 +722,7 @@ def augment_and_prep_train_images(
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     os.makedirs(temp_img_dir, exist_ok=True)
 
-    for img_file_name in tqdm(orig_img_files, desc='Augmenting images'):
+    def _transform_image(img_file_name: str):
         orig_scaled_img, orig_bboxes = read_image_with_yolo_annotations(
             img_file_name,
             resize=(image_size, image_size),
@@ -746,6 +750,9 @@ def augment_and_prep_train_images(
                     orig_filename=img_file_name, augmentation_name=f'g{g}-i{i}',
                     output_dir=temp_img_dir
                 )
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        list(tqdm(executor.map(_transform_image, orig_img_files), total=len(orig_img_files), desc="Augmenting Images"))
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # Split into train, validation
@@ -775,3 +782,9 @@ def augment_and_prep_train_images(
         )
 
     print("Process complete.")
+
+
+def clean_images(img_file_glob: str):
+    for img_file_name in tqdm(img_file_glob, desc="Cleaning"):
+        image, bboxes = read_image_with_yolo_annotations(img_file_name)
+        cv2.imwrite(img_file_name, image)

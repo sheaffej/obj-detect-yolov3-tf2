@@ -273,10 +273,13 @@ def write_yolo_anno_file(yolo_file: str, bboxes: List, img_width: int, img_heigh
         assert bboxes.shape[1] == 5, f"Expecting 5 values in bbox, found {bboxes}"
 
         for bbox in bboxes:
-            xcenter, ycenter, width, height = bbox_xyminmax_to_yolo(
-                img_width, img_height,
-                bbox[0], bbox[1], bbox[2], bbox[3]
-            )
+            if isinstance(bbox[0], int):
+                xcenter, ycenter, width, height = bbox_xyminmax_to_yolo(
+                    img_width, img_height,
+                    bbox[0], bbox[1], bbox[2], bbox[3]
+                )
+            else:
+                xcenter, ycenter, width, height = bbox[0], bbox[1], bbox[2], bbox[3]
             class_id = int(bbox[4])
             f.write(f"{class_id} {xcenter} {ycenter} {width} {height}\n")
 
@@ -319,17 +322,19 @@ def read_image_with_yolo_annotations(img_filename: str, resize: Tuple[int] = Non
 def write_augmented_image_files(
     new_img: np.ndarray, bboxes: np.ndarray, orig_filename: str,
     augmentation_name: str, output_dir: str, verbose: bool = False
-) -> Tuple[str]:
+) -> Tuple[str, str]:
     """Write a new image file that has been augmented
 
     Args:
         new_img (np.ndarray): The augmented image to write
+        bboxes (np.ndarray): 
         orig_filename (str): The file name of the original (unaugmented) image
-        augmentation_type (str): A string label for the type of augmentation. Becomes part of the new image's file name
+        augmentation_name (str): A string label for the type of augmentation. Becomes part of the new image's file name
         output_dir (str): The directory in which to write the augmented file
+        verbose (bool): Print additional information.
 
     Returns:
-        List[str, str]: The file name of the augmented image file, and yolo annotation file written
+        Tuple[str, str]: The file name of the augmented image file, and yolo annotation file written
 
     """
     augmentation_name = augmentation_name.replace(' ', '').lower()   # clean up aug_type string
