@@ -167,8 +167,9 @@ def _prep_training_data(
 
 def _train_val_test_split(
     list_to_split: List[any],
+    rng: np.random.Generator,
     val_fraction: float, test_fraction: float = 0.0,
-    shuffle: bool = True, rng: np.random.Generator = None, verbose: bool = False
+    shuffle: bool = True, verbose: bool = False
 ) -> dict:
     """Splits a list of items into 2 or 3 sets: `train`, and one or both of `validation` and `test`.
     The values of `val_fraction` and `test_fraction` must be less than 1.0. The remainder fraction
@@ -200,13 +201,13 @@ def _train_val_test_split(
     item_split_sets = {}
     if num_val_items > 0 and num_test_items > 0:
         train, val, test = np.split(list_to_split, [num_train_items, (num_train_items + num_val_items)])
-        item_split_sets = {"train": train, "validation": val, "test": test}
+        item_split_sets = {"train": train.tolist(), "validation": val.tolist(), "test": test.tolist()}
     elif num_val_items > 0 and num_test_items == 0:
         train, val = np.split(list_to_split, [num_train_items])
-        item_split_sets = {"train": train, "validation": val}
+        item_split_sets = {"train": train.tolist(), "validation": val.tolist()}
     elif num_val_items == 0 and num_test_items > 0:
         train, test = np.split(list_to_split, [num_train_items])
-        item_split_sets = {"train": train, "test": test}
+        item_split_sets = {"train": train.tolist(), "test": test.tolist()}
 
     return item_split_sets
 
@@ -763,7 +764,7 @@ def augment_and_prep_train_images(
 
     print('Splitting augmented images into train/validation sets...')
     img_files = glob(TEMP_DIR_GLOB)
-    splits = _train_val_test_split(img_files, val_fraction=0.1, test_fraction=0., shuffle=True, rng=rng)
+    splits = _train_val_test_split(img_files,  rng=rng, val_fraction=0.1, test_fraction=0., shuffle=True)
 
     for split_name, split_items in splits.items():
         print(f"  {split_name}: {len(split_items)} images")
