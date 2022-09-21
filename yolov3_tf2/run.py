@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+import json
 from glob import glob
 import numpy as np
 import os
@@ -791,3 +793,183 @@ def clean_images(img_file_glob: str):
     for img_file_name in tqdm(img_file_glob, desc="Cleaning"):
         image, bboxes = read_image_with_yolo_annotations(img_file_name)
         cv2.imwrite(img_file_name, image)
+
+
+def augment_3(
+    train_val_json: str,
+    train_images_dir: str,
+    tf_output_dir: str,
+    temp_img_dir: str = '/tmp/images',
+    tf_output_prefix: str = '',
+    image_size: int = 416,
+    keep_original: bool = True,
+    min_file_mb_size: int = 30,
+    num_threads: int = 1,
+    max_split_files: int = None
+):
+
+    # Get list of train and validation images
+    splits: dict
+    with open(train_val_json, 'r') as f:
+        splits = json.load(f)
+
+    train_image_files = [os.path.join(train_images_dir, f) for f in splits['train']]
+    val_image_files = [os.path.join(train_images_dir, f) for f in splits['validation']]
+
+    if max_split_files:
+        train_image_files = train_image_files[:max_split_files]
+        val_image_files = val_image_files[:max_split_files]
+
+    assert len(train_image_files) > 0, f"No training images found in {train_val_json}"
+    assert len(val_image_files) > 0, f"No validation images found in {train_val_json}"
+    print(f"{len(train_image_files)}/{len(val_image_files)} train/val images found")
+
+    os.makedirs(temp_img_dir, exist_ok=True)
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Declare transform operation
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    def _transform_image(output_dir: str, transform_groups: list, img_file_name: str):
+
+        orig_scaled_img, orig_bboxes = read_image_with_yolo_annotations(
+            img_file_name,
+            resize=(image_size, image_size),
+            yolo_boxes=True,
+            bgr2rgb=True
+        )
+
+        # Write the resized original
+        if keep_original:
+            write_augmented_image_files(
+                new_img=orig_scaled_img, bboxes=orig_bboxes, orig_filename=img_file_name,
+                augmentation_name='orig', output_dir=output_dir
+            )
+
+        # For each transform group
+        transform: A.core.composition.Compose
+        for g, t_group in enumerate(transform_groups):
+            transform, num_imgs = t_group
+
+            # Transform the number of times requested
+            for i in range(num_imgs):
+                transformed = transform(image=orig_scaled_img, bboxes=orig_bboxes.tolist())
+
+                write_augmented_image_files(
+                    new_img=transformed['image'], bboxes=np.array(transformed['bboxes']),
+                    orig_filename=img_file_name, augmentation_name=f'g{g}-i{i}',
+                    output_dir=output_dir
+                )
+
+    bbox_params = A.BboxParams(format='yolo', min_area=32, min_visibility=0.3)
+
+    t_hflip = A.Compose(
+        [
+            A.HorizontalFlip(p=1.0),
+        ],
+        bbox_params=bbox_params
+    )
+
+    t_rotate_w_noise = A.Compose(
+        [
+            A.RandomRotate90(p=1.0),
+            A.HorizontalFlip(p=0.5),
+            A.GaussNoise(p=0.2),
+            A.GaussianBlur(blur_limit=5, p=0.1),
+        ],
+        bbox_params=bbox_params
+    )
+
+    t_safe_crop_per = A.Compose(
+        [
+            A.RandomSizedBBoxSafeCrop(image_size, image_size, p=1.0),
+            A.Perspective(scale=(0.05, 0.2), pad_mode=1, p=1.0),
+            A.ToGray(p=0.2),
+        ],
+        bbox_params=bbox_params
+    )
+
+    t_reg_crop = A.Compose(
+        [
+            A.RandomResizedCrop(image_size, image_size, p=1.0),
+            A.Perspective(scale=(0.05, 0.2), pad_mode=1, p=1.0),
+        ],
+        bbox_params=bbox_params
+    )
+
+    t_complex = A.Compose(
+        [
+            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
+            A.HorizontalFlip(p=0.5),
+            A.Perspective(scale=(0.05, 0.3), pad_mode=1, p=0.5),
+            A.ShiftScaleRotate(shift_limit=0.3, scale_limit=0.5, rotate_limit=60, border_mode=1, p=0.75),
+            A.GaussNoise(p=0.3),
+            A.GaussianBlur(blur_limit=5, p=0.2),
+            A.ChannelDropout(p=0.2),
+        ],
+        bbox_params=bbox_params
+    )
+
+    # Prep output dirs
+    train_output_dir = os.path.join(temp_img_dir, 'train')
+    val_output_dir = os.path.join(temp_img_dir, 'validation')
+    os.makedirs(train_output_dir, exist_ok=True)
+    os.makedirs(val_output_dir, exist_ok=True)
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~
+    # Augment training images
+    # ~~~~~~~~~~~~~~~~~~~~~~~
+
+    transform_groups = [
+        (t_hflip, 1),
+        (t_rotate_w_noise, 3),
+        (t_safe_crop_per, 4),
+        (t_reg_crop, 8),
+        (t_complex, 30)
+    ]
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        list(tqdm(
+            executor.map(partial(_transform_image, train_output_dir, transform_groups), train_image_files),
+            total=len(train_image_files),
+            desc="Augmenting training images"
+        ))
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Augment validation images
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~
+    transform_groups = [
+        (t_hflip, 1),
+        (t_rotate_w_noise, 3)
+    ]
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        list(tqdm(
+            executor.map(partial(_transform_image, val_output_dir, transform_groups), val_image_files),
+            total=len(val_image_files),
+            desc="Augmenting validation images"
+        ))
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Convert for tfrecords and write tfrecord files
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    print()
+    print('Converting images to tfrecord files...')
+
+    os.makedirs(tf_output_dir, exist_ok=True)
+
+    # Assumes augmented files are PNG image files
+    aug_train_images = glob(os.path.join(temp_img_dir, 'train', '*.png'))
+    write_training_tfrecords(
+        items=aug_train_images, type_name='train',
+        output_dir=tf_output_dir, file_prefix=tf_output_prefix,
+        min_file_mb=min_file_mb_size
+    )
+
+    aug_val_images = glob(os.path.join(temp_img_dir, 'validation', '*.png'))
+    write_training_tfrecords(
+        items=aug_val_images, type_name='validation',
+        output_dir=tf_output_dir, file_prefix=tf_output_prefix,
+        min_file_mb=min_file_mb_size
+    )
+
+    print("Process complete.")
