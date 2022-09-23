@@ -872,9 +872,14 @@ def augment_3(
     t_rotate_w_noise = A.Compose(
         [
             A.RandomRotate90(p=1.0),
+            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
             A.HorizontalFlip(p=0.5),
             A.GaussNoise(p=0.2),
             A.GaussianBlur(blur_limit=5, p=0.1),
+            A.OneOf([
+                A.ToGray(p=0.25),
+                A.ChannelDropout(p=0.75),
+            ], p=0.2)
         ],
         bbox_params=bbox_params
     )
@@ -882,8 +887,15 @@ def augment_3(
     t_safe_crop_per = A.Compose(
         [
             A.RandomSizedBBoxSafeCrop(image_size, image_size, p=1.0),
-            A.Perspective(scale=(0.05, 0.2), pad_mode=1, p=1.0),
-            A.ToGray(p=0.2),
+            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
+            # A.Perspective(scale=(0.05, 0.2), pad_mode=1, p=1.0),
+            A.HorizontalFlip(p=0.5),
+            A.GaussNoise(p=0.2),
+            A.GaussianBlur(blur_limit=5, p=0.1),
+            A.OneOf([
+                A.ToGray(p=0.25),
+                A.ChannelDropout(p=0.75),
+            ], p=0.2)
         ],
         bbox_params=bbox_params
     )
@@ -891,23 +903,31 @@ def augment_3(
     t_reg_crop = A.Compose(
         [
             A.RandomResizedCrop(image_size, image_size, p=1.0),
-            A.Perspective(scale=(0.05, 0.2), pad_mode=1, p=1.0),
+            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
+            # A.Perspective(scale=(0.05, 0.2), pad_mode=1, p=1.0),
+            A.HorizontalFlip(p=0.5),
+            A.GaussNoise(p=0.2),
+            A.GaussianBlur(blur_limit=5, p=0.1),
+            A.OneOf([
+                A.ToGray(p=0.25),
+                A.ChannelDropout(p=0.75),
+            ], p=0.2)
         ],
         bbox_params=bbox_params
     )
 
-    t_complex = A.Compose(
-        [
-            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
-            A.HorizontalFlip(p=0.5),
-            A.Perspective(scale=(0.05, 0.3), pad_mode=1, p=0.5),
-            A.ShiftScaleRotate(shift_limit=0.3, scale_limit=0.5, rotate_limit=60, border_mode=1, p=0.75),
-            A.GaussNoise(p=0.3),
-            A.GaussianBlur(blur_limit=5, p=0.2),
-            A.ChannelDropout(p=0.2),
-        ],
-        bbox_params=bbox_params
-    )
+    # t_complex = A.Compose(
+    #     [
+            # A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=1.0),
+    #         A.HorizontalFlip(p=0.5),
+    #         A.Perspective(scale=(0.05, 0.3), pad_mode=1, p=0.5),
+    #         A.ShiftScaleRotate(shift_limit=0.3, scale_limit=0.5, rotate_limit=60, border_mode=1, p=0.75),
+    #         A.GaussNoise(p=0.3),
+    #         A.GaussianBlur(blur_limit=5, p=0.2),
+    #         A.ChannelDropout(p=0.2),
+    #     ],
+    #     bbox_params=bbox_params
+    # )
 
     # Prep output dirs
     train_output_dir = os.path.join(temp_img_dir, 'train')
@@ -921,10 +941,10 @@ def augment_3(
 
     transform_groups = [
         (t_hflip, 1),
-        (t_rotate_w_noise, 3),
-        (t_safe_crop_per, 4),
-        (t_reg_crop, 8),
-        (t_complex, 30)
+        (t_rotate_w_noise, 5),
+        (t_safe_crop_per, 5),
+        (t_reg_crop, 10),
+        # (t_complex, 30)
     ]
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
