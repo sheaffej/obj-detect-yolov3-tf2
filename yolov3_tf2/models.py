@@ -22,10 +22,6 @@ from tensorflow.python.keras.losses import (
 )
 from yolov3_tf2.utils import broadcast_iou
 
-DEFAULT_MAX_BOXES = 100
-DEFAULT_IOU_THRESHOLD = 0.5
-DEFAULT_SCORE_THRESHOLD = 0.5
-
 yolo_anchors = np.array([(10, 13), (16, 30), (33, 23), (30, 61), (62, 45),
                          (59, 119), (116, 90), (156, 198), (373, 326)],
                         np.float32) / 416
@@ -158,7 +154,7 @@ def YoloOutput(filters, anchors, classes, name=None):
     return yolo_output
 
 
-# As tensorflow lite doesn't support tf.size used in tf.meshgrid, 
+# As tensorflow lite doesn't support tf.size used in tf.meshgrid,
 # we reimplemented a simple meshgrid function that use basic tf function.
 def _meshgrid(n_a, n_b):
 
@@ -307,7 +303,7 @@ def yolo_nms(outputs, classes, max_boxes, score_threshold, iou_threshold, soft_n
     return boxes, scores, classes, valid_detections
 
 
-def YoloV3(size: int = None, channels:int = 3, anchors: np.ndarray = yolo_anchors,
+def YoloV3(size: int = None, channels: int = 3, anchors: np.ndarray = yolo_anchors,
            masks: np.ndarray = yolo_anchor_masks, classes: int = 80, training: bool = False,
            max_boxes: int = 100, iou_threshold: float = 0.5,
            score_threshold: float = 0.5, soft_nms_sigma: float = 0.0
@@ -341,14 +337,14 @@ def YoloV3(size: int = None, channels:int = 3, anchors: np.ndarray = yolo_anchor
             name='yolo_nms'
         )((boxes_0[:3], boxes_1[:3], boxes_2[:3]))  # Input (bbox, objectness, class_probs) from yolo_boxes()
 
-    # Outputs: see output of yolo_nms()
-    return Model(inputs, outputs, name='yolov3')
+        # Outputs: see output of yolo_nms()
+        return Model(inputs, outputs, name='yolov3')
 
 
-def YoloV3Tiny(size=None, channels=3, anchors=yolo_tiny_anchors,
-               masks=yolo_tiny_anchor_masks, classes=80, training=False,
-               max_boxes=DEFAULT_MAX_BOXES, iou_threshold=DEFAULT_IOU_THRESHOLD,
-               score_threshold=DEFAULT_SCORE_THRESHOLD
+def YoloV3Tiny(size: int = None, channels: int = 3, anchors: np.ndarray = yolo_tiny_anchors,
+               masks: np.ndarray = yolo_tiny_anchor_masks, classes: int = 80, training: bool = False,
+               max_boxes: int = 100, iou_threshold: float = 0.5,
+               score_threshold: float = 0.5, soft_nms_sigma: float = 0.0
 ):
     x = inputs = Input([size, size, channels], name='input')
 
@@ -361,15 +357,22 @@ def YoloV3Tiny(size=None, channels=3, anchors=yolo_tiny_anchors,
     output_1 = YoloOutput(128, len(masks[1]), classes, name='yolo_output_1')(x)
 
     if training:
+        # Output from all YOLO layers to use with the YoloLoss function
         return Model(inputs, (output_0, output_1), name='yolov3')
 
-    boxes_0 = Lambda(lambda x: yolo_boxes(x, anchors[masks[0]], classes),
-                     name='yolo_boxes_0')(output_0)
-    boxes_1 = Lambda(lambda x: yolo_boxes(x, anchors[masks[1]], classes),
-                     name='yolo_boxes_1')(output_1)
-    outputs = Lambda(lambda x: yolo_nms(x, anchors, masks, classes, max_boxes, iou_threshold, score_threshold),
-                     name='yolo_nms')((boxes_0[:3], boxes_1[:3]))
-    return Model(inputs, outputs, name='yolov3_tiny')
+    else:
+        # Output bounding box predictions useable for drawing or object localizing
+        boxes_0 = Lambda(lambda x: yolo_boxes(x, anchors[masks[0]], classes), name='yolo_boxes_0')(output_0)
+        boxes_1 = Lambda(lambda x: yolo_boxes(x, anchors[masks[1]], classes), name='yolo_boxes_1')(output_1)
+
+        outputs = Lambda(
+            # lambda x: yolo_nms(x, anchors, masks, classes, max_boxes, iou_threshold, score_threshold),
+            lambda x: yolo_nms(x, classes, max_boxes, score_threshold, iou_threshold, soft_nms_sigma),
+            name='yolo_nms'
+        )((boxes_0[:3], boxes_1[:3]))  # Input (bbox, objectness, class_probs) from yolo_boxes()
+
+        # Outputs: see output of yolo_nms()
+        return Model(inputs, outputs, name='yolov3_tiny')
 
 
 def YoloLoss(anchors, classes=80, ignore_thresh=0.5):
